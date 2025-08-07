@@ -11,14 +11,25 @@ function makeEntries(map: Record<string, number>, side: Side): Entry[] {
     .map(([account, amount]) => ({ account, amount, side }));
 }
 
+function clamp(n: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, n));
+}
+
 export default function Banks() {
   // Parameters (kept simple/minimal)
-  const initialCashDeposit = 1000;
-  const reserveRatio = 0.1; // 10% reserves retained
+  const initialCashDepositDefault = 1000;
+
+  // UI state
+  const [reserveRatioPct, setReserveRatioPct] = useState(10); // %
+  const [initialCashDeposit, setInitialCashDeposit] = useState(initialCashDepositDefault);
+  const [multiplierSteps, setMultiplierSteps] = useState(3); // how many rounds bank lends/re-deposits (toy geometric series)
+  const [step, setStep] = useState(0);
+
+  const reserveRatio = clamp(reserveRatioPct, 0, 100) / 100; // 0..1
+
+  // Core first-pass minimal walkthrough values (single loop)
   const loanOut = initialCashDeposit * (1 - reserveRatio);
   const redeposit = loanOut; // borrower spends -> merchant redeposits at same bank (simplified single-bank loop)
-
-  const [step, setStep] = useState(0);
 
   const steps = useMemo(() => ([
     {
@@ -27,17 +38,17 @@ export default function Banks() {
     },
     {
       title: 'Customer cash deposit at bank',
-      description: 'A customer deposits 1000 cash. Bank assets increase (Cash/Reserves), and a matching liability is created (Customer Deposit).',
+      description: `A customer deposits ${initialCashDepositDefault} cash. Bank assets increase (Cash/Reserves), and a matching liability is created (Customer Deposit).`,
     },
     {
       title: 'Bank retains reserves and issues a loan',
-      description: 'With a 10% reserve ratio, the bank holds 100 as reserves and can lend 900. A new asset appears (Loan), and simultaneously a new deposit liability is created for the borrower.',
+      description: `With a ${reserveRatioPct}% reserve ratio, the bank holds ${(initialCashDeposit * reserveRatio).toFixed(0)} as reserves and can lend ${(loanOut).toFixed(0)}. A new asset appears (Loan), and simultaneously a new deposit liability is created for the borrower.`,
     },
     {
       title: 'Borrower spends; merchant redeposits at the same bank',
-      description: 'Borrower uses the 900 deposit to pay a merchant, who redeposits it at the same bank. Total deposits rise; the bank’s assets still cover its liabilities.',
+      description: 'Borrower uses the loan deposit to pay a merchant, who redeposits it at the same bank. Total deposits rise; assets still cover liabilities.',
     },
-  ]), []);
+  ]), [reserveRatioPct, initialCashDeposit, loanOut]);
 
   // Compute ledgers per step: Bank + two representative customers (Depositor and Borrower/Merchant)
   const {
@@ -67,7 +78,7 @@ export default function Banks() {
       // Nothing yet
       note = 'No balances.';
     } else if (step === 1) {
-      // Customer deposits cash 1000
+      // Customer deposits cash
       bankA = { 'Reserves/Cash': initialCashDeposit };
       bankL = { 'Deposits (Customer)': initialCashDeposit };
       depositorA = { 'Deposit at Bank': initialCashDeposit };
@@ -78,12 +89,12 @@ export default function Banks() {
       amt = initialCashDeposit;
       note = 'Customer hands over cash; bank records matching deposit liability.';
     } else if (step === 2) {
-      // Bank retains 100 as reserves and issues 900 loan, creating borrower deposit
+      // Bank retains reserves and issues loan, creating borrower deposit
       bankA = {
-        'Reserves/Cash': initialCashDeposit * reserveRatio, // 100
-        'Loan to Borrower': loanOut // 900
+        'Reserves/Cash': initialCashDeposit * reserveRatio,
+        'Loan to Borrower': loanOut
       };
-      // Two deposits exist: original customer 1000 and borrower 900
+      // Two deposits exist: original customer and borrower
       bankL = {
         'Deposits (Customer)': initialCashDeposit,
         'Deposits (Borrower)': loanOut
@@ -99,13 +110,12 @@ export default function Banks() {
       amt = loanOut;
       note = 'Bank creates a loan asset and matching borrower deposit liability.';
     } else if (step === 3) {
-      // Borrower spends 900; merchant redeposits at the same bank
-      // Bank assets unchanged from step 2
+      // Borrower spends; merchant redeposits at the same bank
       bankA = {
-        'Reserves/Cash': initialCashDeposit * reserveRatio, // 100
-        'Loan to Borrower': loanOut // 900
+        'Reserves/Cash': initialCashDeposit * reserveRatio,
+        'Loan to Borrower': loanOut
       };
-      // Deposits shift: original customer 1000 remains, borrower deposit 0, merchant deposit +900
+      // Deposits shift: original customer remains, borrower deposit 0, merchant deposit +redeposit
       bankL = {
         'Deposits (Customer)': initialCashDeposit,
         'Deposits (Merchant)': redeposit
@@ -142,14 +152,160 @@ export default function Banks() {
     return { bankEntries, depositorEntries, borrowerEntries, flowFrom: from, flowTo: to, flowAmount: amt, flowNote: note };
   }, [step, initialCashDeposit, reserveRatio, loanOut, redeposit]);
 
+  // Reserve ratio table + money multiplier toy calculator
+  const {
+    theoreticalMultiplier,
+    seriesRows,
+    totalCreatedDeposits,
+    perceivedMoneyInCirculation
+  } = useMemo(() => {
+    // The classic theoretical simple multiplier is m = 1 / rr (when rr > 0)
+    const rr = reserveRatio;
+    const m = rr > 0 ? 1 / rr : Infinity;
+
+    // Build a geometric loan/redeposit series for 'multiplierSteps' rounds starting from initialCashDeposit
+    // Round 0: initial deposit counts as deposits; loans begin after reserves held back
+    const rows: { round: number; newLoan: number; newDeposit: number; reservesHeld: number }[] = [];
+    let baseDeposit = initialCashDeposit;
+    let runningDepositCreated = initialCashDeposit; // includes the initial deposit
+
+    // Subsequent rounds originate from lending a fraction of the previous deposit
+    let lastLoanable = baseDeposit * (1 - rr);
+
+    for (let i = 1; i <= multiplierSteps; i++) {
+      const newLoan = lastLoanable;
+      const reservesHeld = newLoan * rr;
+      const newDeposit = newLoan; // redeposit of spending at same bank (toy)
+      runningDepositCreated += newDeposit;
+
+      rows.push({ round: i, newLoan, newDeposit, reservesHeld });
+
+      // Next round: bank lends out (1-rr) of this new deposit
+      lastLoanable = newDeposit * (1 - rr);
+    }
+
+    // Perceived money in circulation (toy): deposits outstanding appear as spendable balances
+    const perceived = runningDepositCreated;
+
+    return {
+      theoreticalMultiplier: m,
+      seriesRows: rows,
+      totalCreatedDeposits: runningDepositCreated,
+      perceivedMoneyInCirculation: perceived,
+    };
+  }, [reserveRatio, multiplierSteps, initialCashDeposit]);
+
   return (
     <section className="section">
       <div className="card glass">
-        <h2 className="h1">Banks — Deposit, Reserves, Loan, Redeposit (minimal walkthrough)</h2>
+        <h2 className="h1">Banks — Deposit, Reserves, Loan, Redeposit</h2>
         <p className="p">
           A bank accepts deposits (its liabilities) and holds reserves/cash (its assets). It can issue loans, creating new deposits.
           When borrowers spend, recipients can redeposit, shifting who holds the deposit while totals remain consistent.
         </p>
+
+        <div className="row" style={{ gap: 12, flexWrap: 'wrap' }}>
+          <div className="panel glass" style={{ minWidth: 280 }}>
+            <div className="row" style={{ alignItems: 'center', gap: 8 }}>
+              <label>Reserve Ratio</label>
+              <input
+                className="range"
+                type="range"
+                min={0}
+                max={50}
+                step={1}
+                value={reserveRatioPct}
+                onChange={(e) => setReserveRatioPct(+e.target.value)}
+              />
+              <span className="badge">{reserveRatioPct}%</span>
+            </div>
+            <div className="row" style={{ alignItems: 'center', gap: 8, marginTop: 8 }}>
+              <label>Initial Cash Deposit</label>
+              <input
+                className="range"
+                type="range"
+                min={100}
+                max={5000}
+                step={100}
+                value={initialCashDeposit}
+                onChange={(e) => setInitialCashDeposit(+e.target.value)}
+              />
+              <span className="badge">{initialCashDeposit.toFixed(0)}</span>
+            </div>
+            <div className="row" style={{ alignItems: 'center', gap: 8, marginTop: 8 }}>
+              <label>Lending Rounds</label>
+              <input
+                className="range"
+                type="range"
+                min={0}
+                max={10}
+                step={1}
+                value={multiplierSteps}
+                onChange={(e) => setMultiplierSteps(+e.target.value)}
+              />
+              <span className="badge">{multiplierSteps}</span>
+            </div>
+            <div className="small" style={{ marginTop: 6, opacity: 0.85 }}>
+              Move the sliders to change the reserve ratio, the initial deposit, and how many rounds lending/redeposit continues in this toy model.
+              This shows both the theoretical multiplier and a finite-steps approximation.
+            </div>
+          </div>
+
+          <div className="panel glass" style={{ minWidth: 280, flex: 1 }}>
+            <div className="h3">Reserve Ratio Table</div>
+            <div className="row" style={{ gap: 16, flexWrap: 'wrap' }}>
+              <div className="card" style={{ padding: 8, minWidth: 180 }}>
+                <div className="small">Reserve Ratio</div>
+                <div className="h3">{(reserveRatio * 100).toFixed(1)}%</div>
+              </div>
+              <div className="card" style={{ padding: 8, minWidth: 180 }}>
+                <div className="small">Theoretical Multiplier</div>
+                <div className="h3">{Number.isFinite(theoreticalMultiplier) ? theoreticalMultiplier.toFixed(2) : '∞'}</div>
+              </div>
+              <div className="card" style={{ padding: 8, minWidth: 180 }}>
+                <div className="small">Actual Deposited (finite rounds)</div>
+                <div className="h3">{totalCreatedDeposits.toFixed(2)}</div>
+              </div>
+              <div className="card" style={{ padding: 8, minWidth: 220 }}>
+                <div className="small">Perceived Money in Circulation</div>
+                <div className="h3">{perceivedMoneyInCirculation.toFixed(2)}</div>
+              </div>
+            </div>
+
+            <div className="small" style={{ marginTop: 8, opacity: 0.9 }}>
+              The theoretical multiplier assumes unlimited rounds with no leakages. The table below shows a finite number of lending rounds.
+            </div>
+
+            <div className="card glass" style={{ marginTop: 8, overflowX: 'auto' }}>
+              <table className="small" style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr style={{ textAlign: 'left', opacity: 0.9 }}>
+                    <th style={{ padding: '6px 8px' }}>Round</th>
+                    <th style={{ padding: '6px 8px' }}>New Loan</th>
+                    <th style={{ padding: '6px 8px' }}>Reserves Held</th>
+                    <th style={{ padding: '6px 8px' }}>New Deposit (Redeposit)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td style={{ padding: '6px 8px' }}>0 (Initial)</td>
+                    <td style={{ padding: '6px 8px' }}>—</td>
+                    <td style={{ padding: '6px 8px' }}>{(initialCashDeposit * reserveRatio).toFixed(2)}</td>
+                    <td style={{ padding: '6px 8px' }}>{initialCashDeposit.toFixed(2)}</td>
+                  </tr>
+                  {seriesRows.map((r) => (
+                    <tr key={r.round}>
+                      <td style={{ padding: '6px 8px' }}>{r.round}</td>
+                      <td style={{ padding: '6px 8px' }}>{r.newLoan.toFixed(2)}</td>
+                      <td style={{ padding: '6px 8px' }}>{r.reservesHeld.toFixed(2)}</td>
+                      <td style={{ padding: '6px 8px' }}>{r.newDeposit.toFixed(2)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div className="row" style={{ gap: 12, alignItems: 'stretch' }}>
@@ -202,7 +358,7 @@ export default function Banks() {
         <ul className="p">
           <li>Deposits are the bank’s liabilities; reserves/cash and loans are the bank’s assets.</li>
           <li>Loan issuance creates a new deposit; spending shifts who holds the deposit, not the total.</li>
-          <li>This is a minimal same-bank walkthrough. Multi-bank flows introduce interbank reserves and settlement.</li>
+          <li>The reserve ratio slider shows a classic geometric-series intuition. Real systems have leakages, capital and liquidity rules, and multi-bank settlement.</li>
         </ul>
       </div>
     </section>
