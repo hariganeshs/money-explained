@@ -156,7 +156,7 @@ export default function Banks() {
   const {
     theoreticalMultiplier,
     seriesRows,
-    totalCreatedDeposits,
+    originalDeposit,
     perceivedMoneyInCirculation
   } = useMemo(() => {
     // The classic theoretical simple multiplier is m = 1 / rr (when rr > 0)
@@ -166,8 +166,7 @@ export default function Banks() {
     // Build a geometric loan/redeposit series for 'multiplierSteps' rounds starting from initialCashDeposit
     // Round 0: initial deposit counts as deposits; loans begin after reserves held back
     const rows: { round: number; newLoan: number; newDeposit: number; reservesHeld: number }[] = [];
-    let baseDeposit = initialCashDeposit;
-    let runningDepositCreated = initialCashDeposit; // includes the initial deposit
+    const baseDeposit = initialCashDeposit;
 
     // Subsequent rounds originate from lending a fraction of the previous deposit
     let lastLoanable = baseDeposit * (1 - rr);
@@ -176,28 +175,30 @@ export default function Banks() {
       const newLoan = lastLoanable;
       const reservesHeld = newLoan * rr;
       const newDeposit = newLoan; // redeposit of spending at same bank (toy)
-      runningDepositCreated += newDeposit;
-
       rows.push({ round: i, newLoan, newDeposit, reservesHeld });
 
       // Next round: bank lends out (1-rr) of this new deposit
       lastLoanable = newDeposit * (1 - rr);
     }
 
-    // Perceived money in circulation (toy): deposits outstanding appear as spendable balances
-    const perceived = runningDepositCreated;
+    // Original deposit is simply the very first depositor's cash
+    const original = baseDeposit;
+
+    // Perceived money in circulation (toy): sum of deposits visible after chosen rounds
+    // Here we consider the original deposit plus each new redeposit as balances seen.
+    const perceived = original + rows.reduce((s, r) => s + r.newDeposit, 0);
 
     return {
       theoreticalMultiplier: m,
       seriesRows: rows,
-      totalCreatedDeposits: runningDepositCreated,
+      originalDeposit: original,
       perceivedMoneyInCirculation: perceived,
     };
   }, [reserveRatio, multiplierSteps, initialCashDeposit]);
 
   return (
     <section className="section">
-      <div className="card glass">
+      <div className="card glass" style={{ border: '1px solid rgba(120,160,255,0.18)', background: 'linear-gradient(180deg, rgba(40,60,100,0.18), rgba(20,25,40,0.18))' }}>
         <h2 className="h1">Banks — Deposit, Reserves, Loan, Redeposit</h2>
         <p className="p">
           A bank accepts deposits (its liabilities) and holds reserves/cash (its assets). It can issue loans, creating new deposits.
@@ -205,7 +206,8 @@ export default function Banks() {
         </p>
 
         <div className="row" style={{ gap: 12, flexWrap: 'wrap' }}>
-          <div className="panel glass" style={{ minWidth: 280 }}>
+          <div className="panel glass" style={{ minWidth: 300, border: '1px solid rgba(255,255,255,0.06)' }}>
+            <div className="h3" style={{ marginBottom: 8 }}>Parameters</div>
             <div className="row" style={{ alignItems: 'center', gap: 8 }}>
               <label>Reserve Ratio</label>
               <input
@@ -246,27 +248,30 @@ export default function Banks() {
               <span className="badge">{multiplierSteps}</span>
             </div>
             <div className="small" style={{ marginTop: 6, opacity: 0.85 }}>
-              Move the sliders to change the reserve ratio, the initial deposit, and how many rounds lending/redeposit continues in this toy model.
-              This shows both the theoretical multiplier and a finite-steps approximation.
+              Change the reserve ratio, the initial deposit, and how many rounds lending/redeposit continues in this toy model.
             </div>
           </div>
 
-          <div className="panel glass" style={{ minWidth: 280, flex: 1 }}>
-            <div className="h3">Reserve Ratio Table</div>
-            <div className="row" style={{ gap: 16, flexWrap: 'wrap' }}>
-              <div className="card" style={{ padding: 8, minWidth: 180 }}>
+          <div className="panel glass" style={{ minWidth: 320, flex: 1, border: '1px solid rgba(255,255,255,0.06)' }}>
+            <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+              <div className="h3">Reserve Ratio Table</div>
+              <span className="badge">Toy model</span>
+            </div>
+
+            <div className="row" style={{ gap: 16, flexWrap: 'wrap', marginTop: 8 }}>
+              <div className="card" style={{ padding: 10, minWidth: 180, border: '1px solid rgba(255,255,255,0.05)', background: 'rgba(90,120,255,0.08)' }}>
                 <div className="small">Reserve Ratio</div>
                 <div className="h3">{(reserveRatio * 100).toFixed(1)}%</div>
               </div>
-              <div className="card" style={{ padding: 8, minWidth: 180 }}>
+              <div className="card" style={{ padding: 10, minWidth: 180, border: '1px solid rgba(255,255,255,0.05)', background: 'rgba(255,180,80,0.08)' }}>
                 <div className="small">Theoretical Multiplier</div>
                 <div className="h3">{Number.isFinite(theoreticalMultiplier) ? theoreticalMultiplier.toFixed(2) : '∞'}</div>
               </div>
-              <div className="card" style={{ padding: 8, minWidth: 180 }}>
-                <div className="small">Actual Deposited (finite rounds)</div>
-                <div className="h3">{totalCreatedDeposits.toFixed(2)}</div>
+              <div className="card" style={{ padding: 10, minWidth: 180, border: '1px solid rgba(255,255,255,0.05)', background: 'rgba(80,200,140,0.10)' }}>
+                <div className="small">Original Deposit</div>
+                <div className="h3">{originalDeposit.toFixed(2)}</div>
               </div>
-              <div className="card" style={{ padding: 8, minWidth: 220 }}>
+              <div className="card" style={{ padding: 10, minWidth: 220, border: '1px solid rgba(255,255,255,0.05)', background: 'rgba(160,120,255,0.10)' }}>
                 <div className="small">Perceived Money in Circulation</div>
                 <div className="h3">{perceivedMoneyInCirculation.toFixed(2)}</div>
               </div>
@@ -276,7 +281,7 @@ export default function Banks() {
               The theoretical multiplier assumes unlimited rounds with no leakages. The table below shows a finite number of lending rounds.
             </div>
 
-            <div className="card glass" style={{ marginTop: 8, overflowX: 'auto' }}>
+            <div className="card glass" style={{ marginTop: 8, overflowX: 'auto', border: '1px solid rgba(255,255,255,0.06)' }}>
               <table className="small" style={{ width: '100%', borderCollapse: 'collapse' }}>
                 <thead>
                   <tr style={{ textAlign: 'left', opacity: 0.9 }}>
@@ -316,7 +321,7 @@ export default function Banks() {
             onPrev={() => setStep(s => Math.max(0, s - 1))}
             onNext={() => setStep(s => Math.min(steps.length - 1, s + 1))}
           />
-          <div className="card glass" style={{ marginTop: 12 }}>
+          <div className="card glass" style={{ marginTop: 12, border: '1px solid rgba(255,255,255,0.06)' }}>
             {flowAmount > 0 ? (
               <FlowArrow from={flowFrom || '—'} to={flowTo || '—'} amount={flowAmount} note={flowNote} />
             ) : (
@@ -325,7 +330,7 @@ export default function Banks() {
           </div>
         </div>
 
-        <div className="panel glass" style={{ flex: 1 }}>
+        <div className="panel glass" style={{ flex: 1, border: '1px solid rgba(255,255,255,0.06)' }}>
           <div className="h3">Bank</div>
           <LedgerTile
             title="Bank — Balance Sheet"
@@ -334,7 +339,7 @@ export default function Banks() {
           />
         </div>
 
-        <div className="panel glass" style={{ flex: 1 }}>
+        <div className="panel glass" style={{ flex: 1, border: '1px solid rgba(255,255,255,0.06)' }}>
           <div className="h3">Customer / Borrower</div>
           <LedgerTile
             title="Customers — Balance Sheet"
@@ -343,7 +348,7 @@ export default function Banks() {
           />
         </div>
 
-        <div className="panel glass" style={{ flex: 1 }}>
+        <div className="panel glass" style={{ flex: 1, border: '1px solid rgba(255,255,255,0.06)' }}>
           <div className="h3">Depositor</div>
           <LedgerTile
             title="Depositor — Balance Sheet"
@@ -353,11 +358,11 @@ export default function Banks() {
         </div>
       </div>
 
-      <div className="card glass" style={{ marginTop: 12 }}>
+      <div className="card glass" style={{ marginTop: 12, border: '1px solid rgba(255,255,255,0.06)' }}>
         <h3 className="h2">Notes</h3>
         <ul className="p">
-          <li>Deposits are the bank’s liabilities; reserves/cash and loans are the bank’s assets.</li>
-          <li>Loan issuance creates a new deposit; spending shifts who holds the deposit, not the total.</li>
+          <li>Original Deposit is the very first depositor’s cash placed at the bank.</li>
+          <li>Perceived Money in Circulation adds the original deposit and each subsequent redeposit in this simplified same-bank model.</li>
           <li>The reserve ratio slider shows a classic geometric-series intuition. Real systems have leakages, capital and liquidity rules, and multi-bank settlement.</li>
         </ul>
       </div>
